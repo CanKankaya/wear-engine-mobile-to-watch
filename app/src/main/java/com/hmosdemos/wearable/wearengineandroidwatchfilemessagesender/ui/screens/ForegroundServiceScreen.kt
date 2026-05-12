@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -54,9 +55,11 @@ import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.Ap
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.HeartbeatLog
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchLinkService
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchMessenger
+import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModel
 
 @Composable
 fun ForegroundServiceScreen(
+    viewModel: MainViewModel,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
@@ -71,6 +74,10 @@ fun ForegroundServiceScreen(
     val watchFailedCount by WatchMessenger.failedCount.collectAsStateWithLifecycle()
     val watchLastEntry by WatchMessenger.lastEntry.collectAsStateWithLifecycle()
     val watchSendEntries by WatchMessenger.entries.collectAsStateWithLifecycle()
+    val watchReceivedCount by WatchMessenger.receivedCount.collectAsStateWithLifecycle()
+    val watchLastReceived by WatchMessenger.lastReceived.collectAsStateWithLifecycle()
+    val watchReceivedEntries by WatchMessenger.receivedEntries.collectAsStateWithLifecycle()
+    val autoBindStatus by WatchMessenger.autoBindStatus.collectAsStateWithLifecycle()
 
     // Re-evaluated every frame so the "now" clock stays live.
     var nowElapsed by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
@@ -139,6 +146,11 @@ fun ForegroundServiceScreen(
                     onCheckedChange = { wantOn ->
                         useFromWatch = wantOn
                         if (wantOn) {
+                            // Try to bind a connected watch right away so the
+                            // first 5s tick already has a device.
+                            if (!WatchMessenger.hasDevice()) {
+                                viewModel.autoBindConnectedDeviceForService { _, _ -> }
+                            }
                             if (hasNotificationPermission(context)) {
                                 WatchLinkService.start(context)
                             } else {
@@ -169,6 +181,49 @@ fun ForegroundServiceScreen(
                 "Heartbeat tick" to heartbeat.toString(),
                 "Uptime" to formatUptime(startedAt, nowElapsed),
             )
+        )
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Watch binding (auto)",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = if (WatchMessenger.hasDevice())
+                        "A device is currently bound. Sending + receiving are active."
+                    else
+                        "No device bound. The service will retry every 5s while running.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                autoBindStatus?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Last attempt: $it",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+            }
+        }
+
+        StatusCard(
+            title = "Watch receiver",
+            rows = listOf(
+                "Device bound" to WatchMessenger.hasDevice().toString(),
+                "Messages received" to watchReceivedCount.toString(),
+                "Last text" to (watchLastReceived?.text ?: "—"),
+                "Last at" to (watchLastReceived?.let {
+                    WatchMessenger.formatTime(it.timestampMs)
+                } ?: "—"),
+            )
+        )
+
+        WatchReceiveLogCard(
+            entries = watchReceivedEntries,
+            onClear = { WatchMessenger.clearReceivedLog() }
         )
 
         StatusCard(
@@ -404,6 +459,74 @@ private fun statusColor(status: WatchMessenger.Status) = when (status) {
     WatchMessenger.Status.SENDING -> MaterialTheme.colorScheme.tertiary
     WatchMessenger.Status.FAILED -> MaterialTheme.colorScheme.error
     WatchMessenger.Status.SKIPPED -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+@Composable
+private fun WatchReceiveLogCard(
+    entries: List<WatchMessenger.ReceivedEntry>,
+    onClear: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(true) }
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Watch receive log",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "${entries.size} entries",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (entries.isNotEmpty()) {
+                    TextButton(onClick = onClear) { Text("Clear") }
+                }
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Filled.KeyboardArrowUp
+                        else Icons.Filled.KeyboardArrowDown,
+                        contentDescription = if (expanded) "Collapse" else "Expand"
+                    )
+                }
+            }
+            if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                if (entries.isEmpty()) {
+                    Text(
+                        text = "No messages received yet. Bind a connected watch above.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 300.dp)
+                    ) {
+                        items(entries.asReversed()) { entry ->
+                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                Text(
+                                    text = "[${WatchMessenger.formatTime(entry.timestampMs)}] " +
+                                        "#${entry.seq}",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                )
+                                Text(
+                                    text = entry.text,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                )
+                                HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

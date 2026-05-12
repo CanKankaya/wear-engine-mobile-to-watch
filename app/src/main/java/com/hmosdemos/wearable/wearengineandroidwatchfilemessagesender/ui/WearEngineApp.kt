@@ -117,6 +117,7 @@ fun WearEngineApp(
                 contentPadding = contentPadding
             )
             BottomTab.Service -> ForegroundServiceScreen(
+                viewModel = viewModel,
                 contentPadding = contentPadding
             )
         }

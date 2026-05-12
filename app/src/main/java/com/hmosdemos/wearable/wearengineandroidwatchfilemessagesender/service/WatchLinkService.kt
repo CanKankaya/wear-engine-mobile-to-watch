@@ -99,6 +99,11 @@ class WatchLinkService : Service() {
             while (true) {
                 delay(5_000)
                 seq += 1
+                // Make sure we have a device before sending. If not, ask the app
+                // to find the currently connected watch and bind it.
+                if (!WatchMessenger.hasDevice()) {
+                    WatchMessenger.tryAutoBind()
+                }
                 WatchMessenger.send(seq, "FG heartbeat #$seq @${SystemClock.elapsedRealtime()}")
             }
         }

@@ -38,6 +38,36 @@ object WatchMessenger {
     @Volatile private var p2pManager: P2pManager? = null
     @Volatile private var device: Device? = null
 
+    /**
+     * Optional auto-bind hook the [com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModel]
+     * registers. Lets the foreground service ask the app to find a connected
+     * watch (without the user picking one manually) every send tick.
+     */
+    @Volatile private var autoBinder: ((onResult: (Boolean, String) -> Unit) -> Unit)? = null
+
+    private val _autoBindStatus = MutableStateFlow<String?>(null)
+    val autoBindStatus: StateFlow<String?> = _autoBindStatus.asStateFlow()
+
+    fun setAutoBinder(binder: (onResult: (Boolean, String) -> Unit) -> Unit) {
+        autoBinder = binder
+    }
+
+    /**
+     * Triggers a one-shot auto-bind attempt if no device is currently bound.
+     * Safe to call from the service every tick.
+     */
+    fun tryAutoBind() {
+        if (device != null) return
+        val binder = autoBinder ?: run {
+            _autoBindStatus.value = "app not ready"
+            return
+        }
+        _autoBindStatus.value = "searching\u2026"
+        binder { ok, msg ->
+            _autoBindStatus.value = (if (ok) "\u2713 " else "\u2717 ") + msg
+        }
+    }
+
     private val _sentCount = MutableStateFlow(0L)
     val sentCount: StateFlow<Long> = _sentCount.asStateFlow()
 
@@ -49,6 +79,38 @@ object WatchMessenger {
 
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
     val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
+
+    data class ReceivedEntry(
+        val seq: Long,
+        val timestampMs: Long,
+        val text: String,
+    )
+
+    private val _receivedCount = MutableStateFlow(0L)
+    val receivedCount: StateFlow<Long> = _receivedCount.asStateFlow()
+
+    private val _receivedEntries = MutableStateFlow<List<ReceivedEntry>>(emptyList())
+    val receivedEntries: StateFlow<List<ReceivedEntry>> = _receivedEntries.asStateFlow()
+
+    private val _lastReceived = MutableStateFlow<ReceivedEntry?>(null)
+    val lastReceived: StateFlow<ReceivedEntry?> = _lastReceived.asStateFlow()
+
+    fun recordReceived(text: String) {
+        val seq = _receivedCount.value + 1
+        _receivedCount.value = seq
+        val entry = ReceivedEntry(seq, System.currentTimeMillis(), text)
+        _lastReceived.value = entry
+        _receivedEntries.update { current ->
+            val next = current + entry
+            if (next.size > MAX_LOG_ENTRIES) next.takeLast(MAX_LOG_ENTRIES) else next
+        }
+    }
+
+    fun clearReceivedLog() {
+        _receivedEntries.value = emptyList()
+        _lastReceived.value = null
+        _receivedCount.value = 0
+    }
 
     fun bind(p2pManager: P2pManager, device: Device) {
         this.p2pManager = p2pManager
