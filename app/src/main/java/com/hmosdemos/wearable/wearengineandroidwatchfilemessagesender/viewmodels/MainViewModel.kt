@@ -11,6 +11,7 @@ import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.domain.mod
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.managers.AuthManager
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.managers.DeviceManager
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.managers.P2pManager
+import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchMessenger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,6 +61,10 @@ class MainViewModel(
         _uiState.value = _uiState.value.copy(
             deviceState = _uiState.value.deviceState.copy(selectedDevice = device)
         )
+
+        // Make the same send path available to the foreground service, so it can
+        // send heartbeats to this device every 5s while running.
+        WatchMessenger.bind(p2pManager, device)
 
         p2pManager.registerReceiver(device, object : P2pManager.MessageListener {
             override fun onMessageReceived(message: String?) {

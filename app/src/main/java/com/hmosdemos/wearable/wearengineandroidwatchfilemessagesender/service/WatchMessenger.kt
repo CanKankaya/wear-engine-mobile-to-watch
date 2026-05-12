@@ -1,0 +1,136 @@
+package com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service
+
+import android.util.Log
+import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.managers.P2pManager
+import com.huawei.wearengine.device.Device
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * Process-wide holder so [WatchLinkService] can reuse the exact same
+ * [P2pManager.sendMessage] path the UI uses, against the device the user
+ * selected in [com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModel].
+ *
+ * Lives as long as the app process. The foreground service keeps the process
+ * alive even when the Activity is gone, so a device bound here from the UI
+ * remains usable from the service.
+ */
+object WatchMessenger {
+
+    private const val TAG = "WatchMessenger"
+    private const val MAX_LOG_ENTRIES = 100
+
+    enum class Status { SENDING, SENT, FAILED, SKIPPED }
+
+    data class Entry(
+        val seq: Long,
+        val timestampMs: Long,
+        val text: String,
+        val status: Status,
+        val detail: String? = null,
+    )
+
+    @Volatile private var p2pManager: P2pManager? = null
+    @Volatile private var device: Device? = null
+
+    private val _sentCount = MutableStateFlow(0L)
+    val sentCount: StateFlow<Long> = _sentCount.asStateFlow()
+
+    private val _failedCount = MutableStateFlow(0L)
+    val failedCount: StateFlow<Long> = _failedCount.asStateFlow()
+
+    private val _lastEntry = MutableStateFlow<Entry?>(null)
+    val lastEntry: StateFlow<Entry?> = _lastEntry.asStateFlow()
+
+    private val _entries = MutableStateFlow<List<Entry>>(emptyList())
+    val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
+
+    fun bind(p2pManager: P2pManager, device: Device) {
+        this.p2pManager = p2pManager
+        this.device = device
+    }
+
+    fun clearDevice() {
+        this.device = null
+    }
+
+    fun hasDevice(): Boolean = device != null
+
+    fun clearLog() {
+        _entries.value = emptyList()
+        _lastEntry.value = null
+        _sentCount.value = 0
+        _failedCount.value = 0
+    }
+
+    /**
+     * Sends [text] using the same Wear Engine path the first screen uses:
+     * [P2pManager.sendMessage] -> Message.Builder().setPayload(bytes).build().
+     *
+     * Outcomes are recorded into [entries] so the UI mirrors the first
+     * screen's behaviour (success / failure both surfaced to the user).
+     */
+    fun send(seq: Long, text: String) {
+        val mgr = p2pManager
+        val dev = device
+        if (mgr == null || dev == null) {
+            record(Entry(seq, System.currentTimeMillis(), text, Status.SKIPPED, "no device selected"))
+            return
+        }
+
+        record(Entry(seq, System.currentTimeMillis(), text, Status.SENDING))
+
+        try {
+            mgr.sendMessage(
+                dev,
+                text,
+                { _ ->
+                    _sentCount.value = _sentCount.value + 1
+                    record(Entry(seq, System.currentTimeMillis(), text, Status.SENT))
+                },
+                { err ->
+                    Log.e(TAG, "send failed: ${err.message}", err)
+                    _failedCount.value = _failedCount.value + 1
+                    record(
+                        Entry(
+                            seq,
+                            System.currentTimeMillis(),
+                            text,
+                            Status.FAILED,
+                            err.message ?: err::class.java.simpleName
+                        )
+                    )
+                }
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "send threw: ${t.message}", t)
+            _failedCount.value = _failedCount.value + 1
+            record(
+                Entry(
+                    seq,
+                    System.currentTimeMillis(),
+                    text,
+                    Status.FAILED,
+                    t.message ?: t::class.java.simpleName
+                )
+            )
+        }
+    }
+
+    private fun record(entry: Entry) {
+        _lastEntry.value = entry
+        _entries.update { current ->
+            val next = current + entry
+            if (next.size > MAX_LOG_ENTRIES) next.takeLast(MAX_LOG_ENTRIES) else next
+        }
+    }
+
+    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+    fun formatTime(timestampMs: Long): String = timeFormat.format(Date(timestampMs))
+}
