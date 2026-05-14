@@ -11,6 +11,7 @@ import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.domain.mod
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.managers.AuthManager
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.managers.DeviceManager
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.managers.P2pManager
+import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchMessenger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +33,10 @@ class MainViewModel(
 
     init {
         p2pManager.setPeerPkgName()
+        // Let the foreground service auto-bind through us when no device is bound.
+        WatchMessenger.setAutoBinder { onResult ->
+            autoBindConnectedDeviceForService(onResult)
+        }
         checkPermissionsAndLoadDevices()
     }
 
@@ -61,6 +66,10 @@ class MainViewModel(
             deviceState = _uiState.value.deviceState.copy(selectedDevice = device)
         )
 
+        // Make the same send path available to the foreground service, so it can
+        // send heartbeats to this device every 5s while running.
+        WatchMessenger.bind(p2pManager, device)
+
         p2pManager.registerReceiver(device, object : P2pManager.MessageListener {
             override fun onMessageReceived(message: String?) {
                 message?.let { msg ->
@@ -69,6 +78,8 @@ class MainViewModel(
                     _uiState.update {
                         it.copy(receivedMessages = currentReceivedMessageList.toList())
                     }
+                    // Also surface the message on the foreground-service screen.
+                    WatchMessenger.recordReceived(msg)
                 }
             }
 
@@ -188,6 +199,35 @@ class MainViewModel(
 
     fun refreshDevices() {
         loadDevices()
+    }
+
+    /**
+     * Used by the foreground-service screen so receiving works without the
+     * user having to manually pick a device on the first screen.
+     *
+     * Loads bonded devices, picks the first one that reports `isConnected`,
+     * and runs it through the existing [selectDevice] path so the same
+     * receiver + WatchMessenger binding is set up.
+     */
+    fun autoBindConnectedDeviceForService(onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            deviceManager.getBondedDevices({ deviceList ->
+                val devices = deviceList?.filterNotNull().orEmpty()
+                if (devices.isEmpty()) {
+                    onResult(false, "No bonded devices")
+                    return@getBondedDevices
+                }
+                val connected = devices.firstOrNull { runCatching { it.isConnected }.getOrDefault(false) }
+                if (connected == null) {
+                    onResult(false, "No connected device (${devices.size} bonded)")
+                    return@getBondedDevices
+                }
+                selectDevice(connected)
+                onResult(true, "Bound to ${connected.name}")
+            }, { error ->
+                onResult(false, error.message ?: "Device load failed")
+            })
+        }
     }
 
     fun clearLogs() {
