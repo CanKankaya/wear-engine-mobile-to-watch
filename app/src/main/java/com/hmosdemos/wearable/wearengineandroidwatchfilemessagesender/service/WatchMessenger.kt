@@ -167,6 +167,10 @@ object WatchMessenger {
                             err.message ?: err::class.java.simpleName
                         )
                     )
+                    // Drop the bound device so the next tick re-binds via
+                    // tryAutoBind(). Failures here usually mean the watch
+                    // disconnected or Wear Engine lost its session.
+                    onSendFailure()
                 }
             )
         } catch (t: Throwable) {
@@ -181,7 +185,13 @@ object WatchMessenger {
                     t.message ?: t::class.java.simpleName
                 )
             )
+            onSendFailure()
         }
+    }
+
+    private fun onSendFailure() {
+        device = null
+        _autoBindStatus.value = "rebind needed (last send failed)"
     }
 
     private fun record(entry: Entry) {
