@@ -20,47 +20,61 @@ The trade-off: the OS requires a **non-dismissable notification** to be shown wh
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
 <service
-    android:name=".WatchLinkService"
+    android:name=".service.WatchLinkService"
     android:exported="false"
     android:foregroundServiceType="dataSync" />
 ```
 
-> **For real Wear Engine usage** swap `dataSync` → `connectedDevice` and the matching permission → `FOREGROUND_SERVICE_CONNECTED_DEVICE`. This also requires the app to hold `BLUETOOTH_CONNECT` (or similar) at the moment `startForeground()` is called on API 34+.
+`dataSync` is used because it has no extra runtime preconditions (no `BLUETOOTH_CONNECT` required).  
+Swap to `connectedDevice` + `FOREGROUND_SERVICE_CONNECTED_DEVICE` if Bluetooth permissions are ever added.
 
-### 2. Service
+### 2. Application class
 
 ```kotlin
-class WatchLinkService : Service() {
-
-    override fun onBind(intent: Intent?) = null
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(
-            NOTIFICATION_ID,
-            buildNotification(this),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC   // must match manifest
-        )
-        // start your Wear Engine listener here
-        return START_STICKY
-    }
-
-    companion object {
-        fun start(context: Context) = context.startForegroundService(
-            Intent(context, WatchLinkService::class.java)
-        )
-        fun stop(context: Context) = context.stopService(
-            Intent(context, WatchLinkService::class.java)
-        )
+class App : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        AppLifecycleTracker.install()   // tracks isAppInForeground for the UI
     }
 }
 ```
 
+Register in the manifest with `android:name=".App"`.
+
+### 3. Service — `WatchLinkService`
+
+Two coroutine loops run inside a `SupervisorJob` scope:
+
+- **Heartbeat** (1 s): increments a tick counter and records process importance into `HeartbeatLog`.
+- **Watch sender** (5 s): if no device is bound yet, calls `WatchMessenger.tryAutoBind()` first, then sends a message to the watch via `WatchMessenger.send()` — the exact same `P2pManager.sendMessage` path the first screen uses.
+
 Key points:
 - Use `startForegroundService()` (not `startService()`) on API 26+.
-- Call `startForeground()` **within 5 seconds** or Android kills the process.
+- Call `startForeground()` **within 5 seconds** — the service handles `ACTION_STOP` before calling it so a stop intent is always safe.
 - `START_STICKY` — OS recreates the service after memory pressure.
+- Both loops are cancelled in `onDestroy()` before the scope is cancelled.
 
-### 3. Notification permission (Android 13+)
+### 4. WatchMessenger (process-wide singleton)
+
+Bridges the UI / ViewModel and the service without passing a `Context`:
+
+```
+ViewModel.selectDevice()  ──►  WatchMessenger.bind(p2pManager, device)
+                               WatchMessenger.setAutoBinder { ... }
+WatchLinkService (5 s)    ──►  WatchMessenger.tryAutoBind()  (if no device)
+                               WatchMessenger.send(seq, text)
+```
+
+Exposes `StateFlow`s for sent count, failed count, last entry, full entry log, received messages — all collected in the UI with `collectAsStateWithLifecycle()`.
+
+### 5. Auto-bind
+
+`WatchMessenger.tryAutoBind()` calls back into `MainViewModel.autoBindConnectedDeviceForService()`, which fetches bonded devices and picks the first where `device.isConnected == true`, then runs the normal `selectDevice()` path (registers the P2p receiver, binds `WatchMessenger`). This is triggered:
+
+1. Immediately when the user enables the "Use from watch" toggle.
+2. Every 5 s by the watch-sender loop if still no device is bound.
+
+### 6. Notification permission (Android 13+)
 
 ```kotlin
 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -68,7 +82,7 @@ if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
 }
 ```
 
-Request this before starting the service, otherwise the sticky notification is silently hidden.
+The UI requests this before starting the service; if denied, the sticky notification is silently hidden and the service will be killed by the OS after ~10 s on Android 13+.
 
 ---
 

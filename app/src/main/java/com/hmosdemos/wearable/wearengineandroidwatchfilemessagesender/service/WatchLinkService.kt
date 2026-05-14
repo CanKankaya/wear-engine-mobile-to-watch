@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.MainActivity
@@ -39,6 +40,7 @@ class WatchLinkService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var heartbeatJob: Job? = null
     private var watchSenderJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -46,6 +48,27 @@ class WatchLinkService : Service() {
         super.onCreate()
         _isRunning.value = true
         _startedAtElapsedRealtime.value = SystemClock.elapsedRealtime()
+        acquireWakeLock()
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "WatchLinkService::sender"
+        ).apply {
+            setReferenceCounted(false)
+            // No timeout: we hold it for the lifetime of the FG service so
+            // the 5s loop can run with screen off + unplugged. Released in
+            // onDestroy().
+            acquire()
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -113,6 +136,7 @@ class WatchLinkService : Service() {
         heartbeatJob?.cancel()
         watchSenderJob?.cancel()
         scope.cancel()
+        releaseWakeLock()
         _isRunning.value = false
         _startedAtElapsedRealtime.value = null
         _heartbeatTick.value = 0

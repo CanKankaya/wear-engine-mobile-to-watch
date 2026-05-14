@@ -16,6 +16,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Keep CPU running while the FG service holds a partial wake lock so
+         the 5s send loop ticks even when the screen is off and the device
+         is unplugged. Without this, Doze + App Standby suspend our process
+         between ticks. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Lets us prompt the user to whitelist us from battery optimization
+         (Doze / App Standby). Required for our use case ("peripheral device
+         companion app") to keep network access while screen-off + unplugged. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:name=".App"
         android:allowBackup="true"

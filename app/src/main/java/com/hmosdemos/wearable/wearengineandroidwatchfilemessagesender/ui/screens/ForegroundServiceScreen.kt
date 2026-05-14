@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.AppLifecycleTracker
+import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.BatteryOptimization
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.HeartbeatLog
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchLinkService
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchMessenger
@@ -93,6 +94,25 @@ fun ForegroundServiceScreen(
     ) { granted ->
         notificationsAllowed = granted
         if (granted) WatchLinkService.start(context)
+    }
+
+    // Re-check whether the OS still considers us battery-optimized whenever
+    // the user comes back from the system dialog.
+    var batteryWhitelisted by remember {
+        mutableStateOf(BatteryOptimization.isIgnoringBatteryOptimizations(context))
+    }
+    LaunchedEffect(appInForeground) {
+        if (appInForeground) {
+            batteryWhitelisted = BatteryOptimization.isIgnoringBatteryOptimizations(context)
+        }
+    }
+    val batteryOptLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        batteryWhitelisted = BatteryOptimization.isIgnoringBatteryOptimizations(context)
+    }
+    val hasOemManager = remember {
+        BatteryOptimization.oemPowerManagerIntent(context) != null
     }
 
     var useFromWatch by remember { mutableStateOf(serviceRunning) }
@@ -170,6 +190,23 @@ fun ForegroundServiceScreen(
                 "UI visible to user" to appInForeground.toString(),
                 "Process importance" to processImportanceLabel(),
             )
+        )
+
+        BatteryWhitelistCard(
+            whitelisted = batteryWhitelisted,
+            hasOemManager = hasOemManager,
+            onRequest = {
+                runCatching {
+                    batteryOptLauncher.launch(BatteryOptimization.requestIgnoreIntent(context))
+                }.onFailure {
+                    runCatching { context.startActivity(BatteryOptimization.settingsListIntent()) }
+                }
+            },
+            onOpenOemManager = {
+                BatteryOptimization.oemPowerManagerIntent(context)?.let {
+                    runCatching { context.startActivity(it) }
+                }
+            }
         )
 
         StatusCard(
@@ -255,9 +292,62 @@ fun ForegroundServiceScreen(
                     text = "• Turn it on, grant notifications.\n" +
                         "• Press Home — service keeps ticking.\n" +
                         "• Swipe from Recents — still ticks.\n" +
-                        "• Tap Stop on the notification to end it.",
+                        "• Tap Stop on the notification to end it.\n" +
+                        "• Lock the screen unplugged — should still tick.\n" +
+                        "  If it stops, tap \"Disable battery optimization\"\n" +
+                        "  above (and on Huawei, also enable us in Phone\n" +
+                        "  Manager → Battery → App launch → Manage manually).",
                     style = MaterialTheme.typography.bodySmall
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BatteryWhitelistCard(
+    whitelisted: Boolean,
+    hasOemManager: Boolean,
+    onRequest: () -> Unit,
+    onOpenOemManager: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = if (whitelisted) {
+            CardDefaults.cardColors()
+        } else {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+        }
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Battery optimization",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = if (whitelisted)
+                    "Whitelisted — Doze + App Standby will NOT throttle the " +
+                        "sender while the screen is off and unplugged."
+                else
+                    "Not whitelisted. With screen off + unplugged, Android " +
+                        "Doze can suspend our network access and the watch " +
+                        "will stop receiving until you plug in the charger. " +
+                        "Tap below to allow.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!whitelisted) {
+                    Button(onClick = onRequest) {
+                        Text("Disable battery optimization")
+                    }
+                }
+                if (hasOemManager) {
+                    TextButton(onClick = onOpenOemManager) {
+                        Text("Open OEM power manager")
+                    }
+                }
             }
         }
     }
