@@ -33,10 +33,10 @@ class MainViewModel(
 
     init {
         p2pManager.setPeerPkgName()
-        // Let the foreground service auto-bind through us when no device is bound.
-        WatchMessenger.setAutoBinder { onResult ->
-            autoBindConnectedDeviceForService(onResult)
-        }
+        // Auto-bind for the foreground service is installed in App.onCreate()
+        // against an app-scoped CoroutineScope so it survives Activity death.
+        // The ViewModel must NOT install its own here — viewModelScope dies
+        // with the Activity, which would freeze auto-bind in the background.
         checkPermissionsAndLoadDevices()
     }
 
