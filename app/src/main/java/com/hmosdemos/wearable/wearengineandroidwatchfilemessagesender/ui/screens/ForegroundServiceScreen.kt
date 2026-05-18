@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -96,6 +97,14 @@ fun ForegroundServiceScreen(
         if (granted) WatchLinkService.start(context)
     }
 
+    // BLUETOOTH_CONNECT (API 31+) satisfies the runtime prerequisite for
+    // declaring the connectedDevice foreground-service type. The service
+    // works without it (it falls back to dataSync), but having it grants us
+    // the more accurate FG type and slightly more lenient OEM treatment.
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* result ignored — service starts either way */ }
+
     // Re-check whether the OS still considers us battery-optimized whenever
     // the user comes back from the system dialog.
     var batteryWhitelisted by remember {
@@ -114,6 +123,7 @@ fun ForegroundServiceScreen(
     val hasOemManager = remember {
         BatteryOptimization.oemPowerManagerIntent(context) != null
     }
+    val isHuawei = remember { BatteryOptimization.isHuawei() }
 
     var useFromWatch by remember { mutableStateOf(serviceRunning) }
     // Keep the toggle in sync if the user stops the service from the notification.
@@ -171,6 +181,20 @@ fun ForegroundServiceScreen(
                             if (!WatchMessenger.hasDevice()) {
                                 viewModel.autoBindConnectedDeviceForService { _, _ -> }
                             }
+                            // On API 31+ ask for BLUETOOTH_CONNECT once so the
+                            // service can declare the connectedDevice FG type.
+                            // We fire-and-forget; the service starts regardless
+                            // because DATA_SYNC is always allowed.
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.BLUETOOTH_CONNECT
+                                ) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                bluetoothPermissionLauncher.launch(
+                                    Manifest.permission.BLUETOOTH_CONNECT
+                                )
+                            }
                             if (hasNotificationPermission(context)) {
                                 WatchLinkService.start(context)
                             } else {
@@ -196,18 +220,73 @@ fun ForegroundServiceScreen(
             whitelisted = batteryWhitelisted,
             hasOemManager = hasOemManager,
             onRequest = {
-                runCatching {
+                // Diagnose silent failures: tell the user exactly what's
+                // happening when they tap the button, so we can tell apart
+                // "system never shows dialog" from "already whitelisted" from
+                // "OEM blocked the intent".
+                if (BatteryOptimization.isIgnoringBatteryOptimizations(context)) {
+                    Toast.makeText(
+                        context,
+                        "Already whitelisted from battery optimization.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    batteryWhitelisted = true
+                    return@BatteryWhitelistCard
+                }
+                if (!BatteryOptimization.canRequestIgnoreOptimizations(context)) {
+                    // The direct request intent isn't supported on this build.
+                    // Open the settings list as a fallback so the user can at
+                    // least find us.
+                    Toast.makeText(
+                        context,
+                        "Direct prompt not supported here \u2014 opening settings list.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    runCatching { context.startActivity(BatteryOptimization.settingsListIntent()) }
+                        .onFailure {
+                            Toast.makeText(
+                                context,
+                                "Couldn't open battery settings: ${it.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    return@BatteryWhitelistCard
+                }
+                val launched = runCatching {
                     batteryOptLauncher.launch(BatteryOptimization.requestIgnoreIntent(context))
-                }.onFailure {
+                }
+                launched.onFailure { err ->
+                    Toast.makeText(
+                        context,
+                        "Prompt failed (${err.javaClass.simpleName}) \u2014 opening settings list.",
+                        Toast.LENGTH_LONG
+                    ).show()
                     runCatching { context.startActivity(BatteryOptimization.settingsListIntent()) }
                 }
             },
             onOpenOemManager = {
                 BatteryOptimization.oemPowerManagerIntent(context)?.let {
                     runCatching { context.startActivity(it) }
+                        .onFailure { err ->
+                            Toast.makeText(
+                                context,
+                                "Couldn't open OEM manager: ${err.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
                 }
             }
         )
+
+        if (isHuawei) {
+            HuaweiInstructionsCard(
+                onOpenOemManager = {
+                    BatteryOptimization.oemPowerManagerIntent(context)?.let {
+                        runCatching { context.startActivity(it) }
+                    }
+                }
+            )
+        }
 
         StatusCard(
             title = "Foreground service",
@@ -643,6 +722,51 @@ private fun StatusCard(title: String, rows: List<Pair<String, String>>) {
                         )
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HuaweiInstructionsCard(onOpenOemManager: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Huawei / Honor — required",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "On EMUI / HarmonyOS the standard battery whitelist is " +
+                    "NOT enough. PowerGenie / App Launch manager will still " +
+                    "kill us a few minutes after the screen turns off and " +
+                    "the cable is unplugged. You MUST also:",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "1. Open Settings \u2192 Battery \u2192 App launch\n" +
+                    "2. Find this app, tap it\n" +
+                    "3. Turn OFF \u201CManage automatically\u201D\n" +
+                    "4. Turn ON all three toggles:\n" +
+                    "   \u2022 Auto-launch\n" +
+                    "   \u2022 Secondary launch\n" +
+                    "   \u2022 Run in background\n" +
+                    "5. Back out and confirm.\n\n" +
+                    "Also: Settings \u2192 Battery \u2192 More battery settings " +
+                    "\u2192 Stay connected when device sleeps \u2192 ON.",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = FontFamily.Monospace
+                )
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onOpenOemManager) {
+                Text("Open App launch settings")
             }
         }
     }

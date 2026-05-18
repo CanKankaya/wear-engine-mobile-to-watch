@@ -54,10 +54,17 @@ class WatchLinkService : Service() {
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
+        // HwPFWService on Huawei/EMUI looks at the wake-lock tag and force-stops
+        // apps whose tag is not in its hardcoded whitelist. Using one of the
+        // whitelisted tags ("LocationManagerService") prevents it from killing
+        // our service after ~10 min of screen-off + unplugged. See
+        // https://dontkillmyapp.com/huawei for background.
+        val tag = if (BatteryOptimization.isHuawei()) {
+            "LocationManagerService"
+        } else {
             "WatchLinkService::sender"
-        ).apply {
+        }
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag).apply {
             setReferenceCounted(false)
             // No timeout: we hold it for the lifetime of the FG service so
             // the 5s loop can run with screen off + unplugged. Released in
@@ -69,6 +76,26 @@ class WatchLinkService : Service() {
     private fun releaseWakeLock() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
+    }
+
+    /**
+     * Returns true iff this app currently satisfies the runtime prerequisite
+     * for declaring [ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE] in
+     * a `startForeground()` call. On API 31+ the system enforces that the app
+     * holds a granted Bluetooth runtime permission; on lower APIs the type is
+     * effectively free to use. If the prereq isn't met we must NOT pass the
+     * flag or the OS throws ForegroundServiceTypeNotAllowedException.
+     */
+    private fun hasConnectedDevicePrereq(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        val perms = arrayOf(
+            "android.permission.BLUETOOTH_CONNECT",
+            "android.permission.BLUETOOTH_SCAN",
+            "android.permission.BLUETOOTH_ADVERTISE",
+        )
+        return perms.any {
+            checkSelfPermission(it) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -83,11 +110,18 @@ class WatchLinkService : Service() {
         val notification = buildNotification(this)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
+            // dataSync has no runtime prerequisite and is always safe to use.
+            // connectedDevice is the more accurate semantic match for an app
+            // that holds a Bluetooth link to a watch and may be treated more
+            // leniently by some OEMs, but on API 31+ it requires the app to
+            // hold a granted runtime Bluetooth permission (BLUETOOTH_CONNECT
+            // etc.). We only OR it in when that prereq is met, otherwise the
+            // system throws ForegroundServiceTypeNotAllowedException at start.
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            if (hasConnectedDevicePrereq()) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            }
+            startForeground(NOTIFICATION_ID, notification, type)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -179,13 +213,19 @@ class WatchLinkService : Service() {
         private fun ensureChannel(context: Context) {
             val nm = context.getSystemService(NotificationManager::class.java)
             if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+                // IMPORTANCE_DEFAULT (not LOW). LOW-importance FG notifications
+                // can be silently restricted by some OEMs (the system treats
+                // them like background work). DEFAULT keeps us anchored as a
+                // visible, user-facing FG service.
                 val channel = NotificationChannel(
                     CHANNEL_ID,
                     "Watch link",
-                    NotificationManager.IMPORTANCE_LOW
+                    NotificationManager.IMPORTANCE_DEFAULT
                 ).apply {
                     description = "Keeps the app connected to the watch."
                     setShowBadge(false)
+                    enableVibration(false)
+                    setSound(null, null)
                 }
                 nm.createNotificationChannel(channel)
             }
@@ -214,6 +254,11 @@ class WatchLinkService : Service() {
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setOngoing(true)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                // PRIORITY_HIGH + VISIBILITY_PUBLIC are belt-and-suspenders for
+                // OEMs that otherwise demote our FG notification (and with it
+                // our process priority) when the screen turns off.
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setContentIntent(contentIntent)
                 .addAction(
                     android.R.drawable.ic_menu_close_clear_cancel,

@@ -33,13 +33,28 @@ object BatteryOptimization {
      * If the user accepts, our app is exempted from Doze + App Standby. This
      * is the only programmatic way to keep network/CPU running with screen
      * off + unplugged on stock Android 10+.
+     *
+     * NOTE: Do NOT set FLAG_ACTIVITY_NEW_TASK here. This intent is launched
+     * via [androidx.activity.result.ActivityResultLauncher] which already
+     * starts it in the correct task; the NEW_TASK flag causes some OEMs
+     * (including Huawei EMUI) to silently no-op the launch, with no dialog
+     * shown to the user.
      */
     @SuppressLint("BatteryLife")
     fun requestIgnoreIntent(context: Context): Intent {
         return Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
             data = Uri.parse("package:${context.packageName}")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+    }
+
+    /**
+     * True iff some activity on this device claims to handle the
+     * battery-optimization request intent. Some heavily customized Android
+     * builds (and some emulators) don't, in which case we must fall back to
+     * [settingsListIntent].
+     */
+    fun canRequestIgnoreOptimizations(context: Context): Boolean {
+        return requestIgnoreIntent(context).resolveActivity(context.packageManager) != null
     }
 
     /**
@@ -92,4 +107,17 @@ object BatteryOptimization {
      * Doze landed in API 23 (M).
      */
     val supported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+
+    /**
+     * True if running on a Huawei / Honor device. These devices ship
+     * additional, non-AOSP power management (PowerGenie, HwPFWService,
+     * App Launch manager) that the standard battery whitelist does NOT
+     * disable, so we need to surface extra instructions to the user.
+     */
+    fun isHuawei(): Boolean {
+        val m = Build.MANUFACTURER.orEmpty().lowercase()
+        val b = Build.BRAND.orEmpty().lowercase()
+        return m.contains("huawei") || m.contains("honor") ||
+            b.contains("huawei") || b.contains("honor")
+    }
 }

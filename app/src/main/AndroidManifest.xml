@@ -14,7 +14,15 @@
          runtime preconditions. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- connectedDevice is the semantically correct FG service type for an app
+         that maintains a Bluetooth link to a watch. Some OEMs (notably Huawei)
+         treat it more leniently than dataSync. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Required on API 31+ to satisfy the connectedDevice FG type runtime
+         prerequisite. Harmless on lower APIs. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- Keep CPU running while the FG service holds a partial wake lock so
          the 5s send loop ticks even when the screen is off and the device
@@ -58,7 +66,7 @@
         <service
             android:name=".service.WatchLinkService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="connectedDevice|dataSync" />
     </application>
 
     <queries>
