@@ -90,11 +90,24 @@ fun ForegroundServiceScreen(
     }
 
     var notificationsAllowed by remember { mutableStateOf(hasNotificationPermission(context)) }
+
+    // Android only shows one permission dialog at a time — if we fire two
+    // launch() calls back-to-back the second one is silently dropped. So we
+    // chain them: BLUETOOTH_CONNECT → POST_NOTIFICATIONS → start service.
+    // The launcher callbacks all check `pendingStartAfterPermissions` and
+    // either advance to the next step or finally start the FG service.
+    var pendingStartAfterPermissions by remember { mutableStateOf(false) }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         notificationsAllowed = granted
-        if (granted) WatchLinkService.start(context)
+        if (pendingStartAfterPermissions && granted) {
+            pendingStartAfterPermissions = false
+            WatchLinkService.start(context)
+        } else {
+            pendingStartAfterPermissions = false
+        }
     }
 
     // BLUETOOTH_CONNECT (API 31+) satisfies the runtime prerequisite for
@@ -103,7 +116,17 @@ fun ForegroundServiceScreen(
     // the more accurate FG type and slightly more lenient OEM treatment.
     val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* result ignored — service starts either way */ }
+    ) { _ ->
+        // Regardless of grant/deny, move on to the notification prompt.
+        if (pendingStartAfterPermissions) {
+            if (hasNotificationPermission(context)) {
+                pendingStartAfterPermissions = false
+                WatchLinkService.start(context)
+            } else {
+                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     // Re-check whether the OS still considers us battery-optimized whenever
     // the user comes back from the system dialog.
@@ -181,24 +204,32 @@ fun ForegroundServiceScreen(
                             if (!WatchMessenger.hasDevice()) {
                                 viewModel.autoBindConnectedDeviceForService { _, _ -> }
                             }
-                            // On API 31+ ask for BLUETOOTH_CONNECT once so the
-                            // service can declare the connectedDevice FG type.
-                            // We fire-and-forget; the service starts regardless
-                            // because DATA_SYNC is always allowed.
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                                ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.BLUETOOTH_CONNECT
-                                ) != PackageManager.PERMISSION_GRANTED
-                            ) {
-                                bluetoothPermissionLauncher.launch(
-                                    Manifest.permission.BLUETOOTH_CONNECT
-                                )
-                            }
-                            if (hasNotificationPermission(context)) {
-                                WatchLinkService.start(context)
-                            } else {
-                                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            // Chain the permission prompts so the user only
+                            // has to toggle the switch once:
+                            //   BLUETOOTH_CONNECT (if needed) → POST_NOTIFICATIONS
+                            //   (if needed) → start service.
+                            pendingStartAfterPermissions = true
+                            val needsBluetooth =
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                                    ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.BLUETOOTH_CONNECT
+                                    ) != PackageManager.PERMISSION_GRANTED
+                            when {
+                                needsBluetooth -> {
+                                    bluetoothPermissionLauncher.launch(
+                                        Manifest.permission.BLUETOOTH_CONNECT
+                                    )
+                                }
+                                !hasNotificationPermission(context) -> {
+                                    permissionLauncher.launch(
+                                        Manifest.permission.POST_NOTIFICATIONS
+                                    )
+                                }
+                                else -> {
+                                    pendingStartAfterPermissions = false
+                                    WatchLinkService.start(context)
+                                }
                             }
                         } else {
                             WatchLinkService.stop(context)
