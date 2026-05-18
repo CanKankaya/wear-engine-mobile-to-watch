@@ -104,25 +104,34 @@ A foreground service is **not** Doze-exempt. Screen off + unplugged → stock
 Android Doze suspends our network access; on Huawei, PowerGenie / App Launch
 manager also kills the process after a few minutes even with a wake lock.
 
-`BatteryOptimization` exposes three intents:
+`BatteryOptimization` exposes three helpers:
 
-| Intent | Purpose |
+| Helper | Purpose |
 |---|---|
 | `requestIgnoreIntent(context)` | System dialog "Allow X to ignore battery optimization?". **No** `FLAG_ACTIVITY_NEW_TASK` — required by `ActivityResultLauncher`, otherwise OEMs drop it silently. |
 | `settingsListIntent()` | Fallback: full battery-optimization list screen. |
-| `oemPowerManagerIntent(context)` | Best-effort component intent into Huawei / Xiaomi / Oppo / Vivo / OnePlus app-launch manager. |
+| `openOemPowerManager(context)` | Tries a list of known vendor "App launch" / "Autostart" activities (Huawei, Honor, Oppo, Vivo) **and** falls back to `ACTION_APPLICATION_DETAILS_SETTINGS` so the user always lands somewhere useful. Returns the label of the screen that opened, or null if everything failed. |
 
-The UI surfaces a `BatteryWhitelistCard` (red until whitelisted) and, when
-`Build.MANUFACTURER` is Huawei/Honor, an extra `HuaweiInstructionsCard`
-explaining the **mandatory** manual steps (the AOSP whitelist alone is not enough):
+Why we try-then-catch instead of `resolveActivity`: many vendor activities
+(especially on newer HarmonyOS / EMUI) are present but not exported, so
+`resolveActivity` lies and returns null even though `startActivity` would
+succeed. We just try each candidate in order and stop on the first one that
+launches.
 
-> Phone Manager → Battery → App launch → this app → turn OFF "Manage
-> automatically" → turn ON Auto-launch, Secondary launch, Run in background.
+The UI surfaces a `BatteryWhitelistCard` (red until whitelisted) and an
+`OemPowerManagerCard` — **shown on every device** because the AOSP whitelist
+alone is not enough on the most popular OEMs. The card lists the manual
+steps per vendor and a button that calls `openOemPowerManager()`. The
+ultimate fallback (App info → Battery → App launch) is one extra tap away
+from where we always land.
 
-Every button shows a `Toast` describing what actually happened ("Already
-whitelisted", "Direct prompt not supported — opening settings list",
-"Prompt failed (ActivityNotFoundException)") so silent OEM failures are
-visible to the user.
+Every button toasts what actually happened ("Already whitelisted", "Opened:
+Huawei App launch", "Couldn't open any power manager screen on this device")
+so silent OEM failures are visible to the user.
+
+For Huawei specifically, `WatchLinkService.acquireWakeLock` also uses the
+`"LocationManagerService"` wake-lock tag (one of HwPFWService's hardcoded
+whitelisted tags) — `BatteryOptimization.isHuawei()` gates that.
 
 ---
 

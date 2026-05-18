@@ -146,7 +146,26 @@ fun ForegroundServiceScreen(
     val hasOemManager = remember {
         BatteryOptimization.oemPowerManagerIntent(context) != null
     }
-    val isHuawei = remember { BatteryOptimization.isHuawei() }
+
+    // Helper: tries every known OEM "app launch" / autostart intent in
+    // order and falls back to this app's settings page. Toasts the result
+    // so the user knows where they landed (or why it failed).
+    fun openOemPowerManager() {
+        val label = BatteryOptimization.openOemPowerManager(context)
+        if (label == null) {
+            Toast.makeText(
+                context,
+                "Couldn't open any power manager screen on this device.",
+                Toast.LENGTH_LONG
+            ).show()
+        } else {
+            Toast.makeText(
+                context,
+                "Opened: $label",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     var useFromWatch by remember { mutableStateOf(serviceRunning) }
     // Keep the toggle in sync if the user stops the service from the notification.
@@ -295,29 +314,12 @@ fun ForegroundServiceScreen(
                     runCatching { context.startActivity(BatteryOptimization.settingsListIntent()) }
                 }
             },
-            onOpenOemManager = {
-                BatteryOptimization.oemPowerManagerIntent(context)?.let {
-                    runCatching { context.startActivity(it) }
-                        .onFailure { err ->
-                            Toast.makeText(
-                                context,
-                                "Couldn't open OEM manager: ${err.message}",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                }
-            }
+            onOpenOemManager = { openOemPowerManager() }
         )
 
-        if (isHuawei) {
-            HuaweiInstructionsCard(
-                onOpenOemManager = {
-                    BatteryOptimization.oemPowerManagerIntent(context)?.let {
-                        runCatching { context.startActivity(it) }
-                    }
-                }
-            )
-        }
+        OemPowerManagerCard(
+            onOpenOemManager = { openOemPowerManager() }
+        )
 
         StatusCard(
             title = "Foreground service",
@@ -759,7 +761,7 @@ private fun StatusCard(title: String, rows: List<Pair<String, String>>) {
 }
 
 @Composable
-private fun HuaweiInstructionsCard(onOpenOemManager: () -> Unit) {
+private fun OemPowerManagerCard(onOpenOemManager: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -768,36 +770,35 @@ private fun HuaweiInstructionsCard(onOpenOemManager: () -> Unit) {
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Huawei / Honor — required",
+                text = "OEM power management",
                 style = MaterialTheme.typography.titleMedium
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
-                text = "On EMUI / HarmonyOS the standard battery whitelist is " +
-                    "NOT enough. PowerGenie / App Launch manager will still " +
-                    "kill us a few minutes after the screen turns off and " +
-                    "the cable is unplugged. You MUST also:",
+                text = "On Huawei / Honor / Oppo / Vivo, the standard battery " +
+                    "whitelist isn't enough — the vendor's own app-launch " +
+                    "manager will still kill this app. You must also allow it " +
+                    "there:",
                 style = MaterialTheme.typography.bodySmall
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "1. Open Settings \u2192 Battery \u2192 App launch\n" +
-                    "2. Find this app, tap it\n" +
-                    "3. Turn OFF \u201CManage automatically\u201D\n" +
-                    "4. Turn ON all three toggles:\n" +
-                    "   \u2022 Auto-launch\n" +
-                    "   \u2022 Secondary launch\n" +
-                    "   \u2022 Run in background\n" +
-                    "5. Back out and confirm.\n\n" +
-                    "Also: Settings \u2192 Battery \u2192 More battery settings " +
-                    "\u2192 Stay connected when device sleeps \u2192 ON.",
+                text = "Settings → Battery → App launch → this app:\n" +
+                    "  • turn OFF \u201CManage automatically\u201D\n" +
+                    "  • turn ON all three toggles",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = FontFamily.Monospace
                 )
             )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Samsung / Pixel / most others: not needed — the " +
+                    "battery whitelist above is enough.",
+                style = MaterialTheme.typography.bodySmall
+            )
             Spacer(Modifier.height(8.dp))
             Button(onClick = onOpenOemManager) {
-                Text("Open App launch settings")
+                Text("Open power management settings")
             }
         }
     }

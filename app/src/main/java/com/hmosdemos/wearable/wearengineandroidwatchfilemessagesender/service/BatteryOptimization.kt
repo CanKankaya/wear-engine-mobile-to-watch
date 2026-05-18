@@ -67,36 +67,110 @@ object BatteryOptimization {
         }
 
     /**
-     * Best-effort intent to open the OEM "protected apps" / autostart manager.
-     * Huawei (this app's main target since it uses Wear Engine) ships an extra
-     * power manager on top of stock Android that overrides the standard
-     * battery-optimization whitelist. The user must enable us there too,
-     * otherwise the OS will still suspend us with screen off + unplugged.
+     * Ordered list of known OEM "app launch" / "autostart" / "protected apps"
+     * activities. Many of these are NOT exported on newer OS versions, so
+     * `resolveActivity` may return null even when the activity actually
+     * exists — that's why we also include action-only intents and a final
+     * `ACTION_APPLICATION_DETAILS_SETTINGS` fallback that is always
+     * resolvable, so the user can navigate from App info → Battery → App
+     * launch manually.
      *
-     * Returns null if no known OEM manager is detected.
+     * Each entry is (label, intent-builder).
      */
-    fun oemPowerManagerIntent(context: Context): Intent? {
-        val candidates = listOf(
-            // Huawei
-            "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
-            "com.huawei.systemmanager" to "com.huawei.systemmanager.optimize.process.ProtectActivity",
-            "com.huawei.systemmanager" to "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity",
-            // Xiaomi
-            "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
-            // Oppo
-            "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
-            "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
-            // Vivo
-            "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
-            // OnePlus
-            "com.oneplus.security" to "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity",
-        )
-        val pm = context.packageManager
-        for ((pkg, cls) in candidates) {
-            val intent = Intent().apply {
+    private fun oemPowerManagerCandidates(context: Context): List<Pair<String, Intent>> {
+        fun component(pkg: String, cls: String): Intent =
+            Intent().apply {
                 component = ComponentName(pkg, cls)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+        return listOf(
+            // --- Huawei / Honor (EMUI / HarmonyOS / MagicUI) ---
+            "Huawei App launch" to component(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
+            ),
+            "Huawei Startup manager" to component(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity"
+            ),
+            "Huawei Protected apps" to component(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.optimize.process.ProtectActivity"
+            ),
+            "Huawei Power manager" to component(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.power.ui.HwPowerManagerActivity"
+            ),
+            // --- Oppo / ColorOS ---
+            "Oppo Startup manager" to component(
+                "com.coloros.safecenter",
+                "com.coloros.safecenter.permission.startup.StartupAppListActivity"
+            ),
+            "Oppo Startup manager" to component(
+                "com.coloros.safecenter",
+                "com.coloros.safecenter.startupapp.StartupAppListActivity"
+            ),
+            "Oppo Power manager" to component(
+                "com.oppo.safe",
+                "com.oppo.safe.permission.startup.StartupAppListActivity"
+            ),
+            // --- Vivo / Funtouch ---
+            "Vivo Background manager" to component(
+                "com.vivo.permissionmanager",
+                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"
+            ),
+            // Samsung / Pixel / most others don't need a vendor-specific
+            // screen — the standard battery-optimization whitelist is enough,
+            // and on Samsung the system manager activities are non-exported
+            // anyway. So we don't try to open anything custom for them; the
+            // app-info fallback below covers it if the user still wants to
+            // poke around.
+            // --- Honor (Magic UI, sometimes separate package) ---
+            "Honor App launch" to component(
+                "com.hihonor.systemmanager",
+                "com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
+            ),
+            // --- Guaranteed fallback: app's own App info page ---
+            // From here the user is one tap away from Battery → App launch on
+            // Huawei, and "Unrestricted" on stock Android.
+            "App info (fallback)" to Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+        )
+    }
+
+    /**
+     * Tries each known OEM power manager intent in order, then falls back to
+     * the app's own settings page. Returns the label of the activity that was
+     * actually started, or null if every attempt failed.
+     */
+    fun openOemPowerManager(context: Context): String? {
+        val pm = context.packageManager
+        for ((label, intent) in oemPowerManagerCandidates(context)) {
+            // resolveActivity is unreliable on Huawei (many activities are not
+            // exported but still launchable from third-party apps), so we just
+            // try-start every candidate. If it throws (ActivityNotFound,
+            // SecurityException for non-exported, etc.) we move on.
+            val ok = runCatching { context.startActivity(intent) }.isSuccess
+            if (ok) return label
+            // For the action-only fallback, resolveActivity IS reliable.
+            if (intent.component == null &&
+                intent.resolveActivity(pm) != null &&
+                runCatching { context.startActivity(intent) }.isSuccess
+            ) return label
+        }
+        return null
+    }
+
+    /**
+     * Back-compat: returns the first OEM intent that the package manager
+     * claims to resolve. Prefer [openOemPowerManager] which actually tries
+     * to launch (and handles non-exported activities).
+     */
+    fun oemPowerManagerIntent(context: Context): Intent? {
+        val pm = context.packageManager
+        for ((_, intent) in oemPowerManagerCandidates(context)) {
             if (intent.resolveActivity(pm) != null) return intent
         }
         return null
