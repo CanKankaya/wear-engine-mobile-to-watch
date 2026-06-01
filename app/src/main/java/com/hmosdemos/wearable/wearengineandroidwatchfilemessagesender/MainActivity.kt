@@ -4,13 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.managers.*
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchLinkService
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.ui.WearEngineApp
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.ui.theme.WearEngineAndroidLiteFileMessageSenderTheme
-import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModel
-import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModelFactory
 
 class MainActivity : ComponentActivity() {
     private lateinit var deviceManager: DeviceManager
@@ -22,18 +19,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         initializeManagers()
+        setupWearEngine()
 
         setContent {
-            val viewModel: MainViewModel = viewModel(
-                factory = MainViewModelFactory(
-                    authManager = authManager,
-                    deviceManager = deviceManager,
-                    p2pManager = p2pManager
-                )
-            )
-
             WearEngineAndroidLiteFileMessageSenderTheme {
-                WearEngineApp(viewModel = viewModel)
+                WearEngineApp()
             }
         }
     }
@@ -47,6 +37,24 @@ class MainActivity : ComponentActivity() {
         deviceManager = app.deviceManager
         authManager = app.authManager
         p2pManager = app.p2pManager
+    }
+
+    private fun setupWearEngine() {
+        // Configure the peer package + request the Wear Engine permission so
+        // the process-scoped auto-binder (installed in App.onCreate) can find
+        // and bind a connected watch for the foreground service.
+        p2pManager.setPeerPkgName()
+        authManager.checkPermissions(object : AuthManager.AuthCheckCallback {
+            override fun onResult(allPermissionsGranted: Boolean) {
+                if (!allPermissionsGranted) {
+                    authManager.requestPermission(null, null)
+                }
+            }
+
+            override fun onError(e: Exception?) {
+                authManager.requestPermission(null, null)
+            }
+        })
     }
 
     override fun onDestroy() {

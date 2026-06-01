@@ -57,11 +57,9 @@ import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.Ba
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.HeartbeatLog
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchLinkService
 import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.service.WatchMessenger
-import com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModel
 
 @Composable
 fun ForegroundServiceScreen(
-    viewModel: MainViewModel,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
@@ -219,9 +217,11 @@ fun ForegroundServiceScreen(
                         useFromWatch = wantOn
                         if (wantOn) {
                             // Try to bind a connected watch right away so the
-                            // first 5s tick already has a device.
+                            // first 5s tick already has a device. The bind
+                            // work itself lives in App's process-scoped
+                            // auto-binder so it keeps working in the background.
                             if (!WatchMessenger.hasDevice()) {
-                                viewModel.autoBindConnectedDeviceForService { _, _ -> }
+                                WatchMessenger.tryAutoBind()
                             }
                             // Chain the permission prompts so the user only
                             // has to toggle the switch once:

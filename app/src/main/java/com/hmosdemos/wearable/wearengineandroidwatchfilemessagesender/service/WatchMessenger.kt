@@ -13,12 +13,12 @@ import java.util.Locale
 
 /**
  * Process-wide holder so [WatchLinkService] can reuse the exact same
- * [P2pManager.sendMessage] path the UI uses, against the device the user
- * selected in [com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModel].
+ * [P2pManager.sendMessage] path against the watch the app auto-binds to
+ * (see App.installAppLevelAutoBinder).
  *
  * Lives as long as the app process. The foreground service keeps the process
- * alive even when the Activity is gone, so a device bound here from the UI
- * remains usable from the service.
+ * alive even when the Activity is gone, so a device bound here remains usable
+ * from the service.
  */
 object WatchMessenger {
 
@@ -39,9 +39,9 @@ object WatchMessenger {
     @Volatile private var device: Device? = null
 
     /**
-     * Optional auto-bind hook the [com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModel]
-     * registers. Lets the foreground service ask the app to find a connected
-     * watch (without the user picking one manually) every send tick.
+     * Optional auto-bind hook that App.installAppLevelAutoBinder registers.
+     * Lets the foreground service ask the app to find a connected watch
+     * (without the user picking one manually) every send tick.
      */
     @Volatile private var autoBinder: ((onResult: (Boolean, String) -> Unit) -> Unit)? = null
 

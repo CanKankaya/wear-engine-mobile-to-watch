@@ -66,44 +66,31 @@ AuthManager
 │       └───hmosdemos
 │           └───wearable
 │               └───wearengineandroidwatchfilemessagesender
+│                   │   App.kt
 │                   │   MainActivity.kt
-│                   │
-│                   ├───data
-│                   │   └───models
-│                   │           DeviceState.kt
-│                   │           FileState.kt
-│                   │           MessageState.kt
-│                   │
-│                   ├───domain
-│                   │   └───models
-│                   │           UiState.kt
 │                   │
 │                   ├───managers
 │                   │       AuthManager.kt
 │                   │       DeviceManager.kt
 │                   │       P2pManager.kt
 │                   │
-│                   ├───ui
-│                   │   │   WearEngineApp.kt
-│                   │   │
-│                   │   ├───screens
-│                   │   │   │   MessageFileSendScreen.kt
-│                   │   │   │
-│                   │   │   └───components
-│                   │   │           LogCard.kt
-│                   │   │           ReceiveMessageCard.kt
-│                   │   │           SelectDeviceCard.kt
-│                   │   │           SendFileCard.kt
-│                   │   │           SendMessageCard.kt
-│                   │   │
-│                   │   └───theme
-│                   │           Color.kt
-│                   │           Theme.kt
-│                   │           Type.kt
+│                   ├───service
+│                   │       AppLifecycleTracker.kt
+│                   │       BatteryOptimization.kt
+│                   │       HeartbeatLog.kt
+│                   │       WatchLinkService.kt
+│                   │       WatchMessenger.kt
 │                   │
-│                   └───viewmodels
-│                           MainViewModel.kt
-│                           MainViewModelFactory.kt
+│                   └───ui
+│                       │   WearEngineApp.kt
+│                       │
+│                       ├───screens
+│                       │       ForegroundServiceScreen.kt
+│                       │
+│                       └───theme
+│                               Color.kt
+│                               Theme.kt
+│                               Type.kt
 ```
 # Constraints and Restrictions
 

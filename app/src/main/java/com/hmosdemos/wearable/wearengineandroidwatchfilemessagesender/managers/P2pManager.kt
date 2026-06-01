@@ -10,7 +10,6 @@ import com.huawei.wearengine.p2p.Message
 import com.huawei.wearengine.p2p.P2pClient
 import com.huawei.wearengine.p2p.Receiver
 import com.huawei.wearengine.p2p.SendCallback
-import java.io.File
 import java.nio.charset.StandardCharsets
 
 
@@ -69,26 +68,6 @@ class P2pManager(context: Context) {
 
     }
 
-    fun pingDevice(
-        device: Device,
-        peerPackageName: String?,
-        successListener: OnSuccessListener<String?>,
-        failureListener: OnFailureListener
-    ) {
-        p2pClient.ping(device) { result ->
-            val message =
-                """- Connected Device Name: ${device.name}
-                   - Peer Package Name: $peerPackageName
-                   - Ping Result: ${STRING_RESULT}${result}
-                """.trimIndent()
-            successListener.onSuccess(message)
-        }.addOnSuccessListener { aVoid: Void? ->
-            successListener.onSuccess("${device.name}${DEVICE_NAME_OF}${peerPackageName}")
-        }.addOnFailureListener { e: Exception? ->
-            failureListener.onFailure(Exception("Ping Fail:$FAILURE$e", e))
-        }
-    }
-
     fun sendMessage(
         device: Device?,
         message: String,
@@ -127,56 +106,7 @@ class P2pManager(context: Context) {
         }
     }
 
-
-    fun sendFile(
-        context: Context,
-        device: Device,
-        successListener: OnSuccessListener<Void?>?,
-        failureListener: OnFailureListener
-    ) {
-        try {
-            val defaultContent = "Test file content!"
-            val fileName = "default_message.txt"
-            val tempFile = File(context.cacheDir, fileName)
-
-            tempFile.writeText(defaultContent)
-
-            val fileMessage = Message.Builder()
-                .setPayload(tempFile)
-                .build()
-
-            val sendCallback: SendCallback = object : SendCallback {
-                override fun onSendResult(resultCode: Int) {
-                    if (resultCode == 207) {
-                        Log.d(TAG, "File send successfully")
-                        messageListener?.onMessageSent("File send successfully")
-                    } else {
-                        Log.e(TAG, "File send failed. Error Code: $resultCode")
-                        messageListener?.onMessageSent("File send failed. Error Code: $resultCode")
-
-                    }
-                }
-
-                override fun onSendProgress(progress: Long) {
-                    Log.d(TAG, "Progress: $progress bytes")
-                }
-            }
-
-            p2pClient.send(device, fileMessage, sendCallback)
-                .addOnSuccessListener(successListener)
-                .addOnFailureListener(failureListener)
-
-            messageListener?.onMessageSent("$fileName have been sent.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Exception sending file: ${e.message}")
-            failureListener.onFailure(e)
-        }
-    }
-
     companion object {
         private const val TAG = "P2pManager"
-        private const val DEVICE_NAME_OF = "'s "
-        private const val STRING_RESULT = " result:"
-        private const val FAILURE = " task failure"
     }
 }

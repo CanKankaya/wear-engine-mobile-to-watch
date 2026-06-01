@@ -16,11 +16,9 @@ class App : Application() {
 
     /**
      * Process-wide singletons. Kept on [App] so the foreground service can
-     * reuse the exact same Wear Engine clients the [MainActivity] /
-     * [com.hmosdemos.wearable.wearengineandroidwatchfilemessagesender.viewmodels.MainViewModel]
-     * use, even after the Activity is destroyed (e.g. user backgrounds the
-     * app and Android frees the Activity). Lazy so they only initialize on
-     * first use.
+     * reuse the exact same Wear Engine clients the [MainActivity] uses, even
+     * after the Activity is destroyed (e.g. user backgrounds the app and
+     * Android frees the Activity). Lazy so they only initialize on first use.
      */
     val deviceManager: DeviceManager by lazy { DeviceManager(this) }
     val p2pManager: P2pManager by lazy { P2pManager(this) }
@@ -28,6 +26,7 @@ class App : Application() {
 
     /**
      * Survives the entire process lifetime — unlike `viewModelScope`, which
+     * dies when the Activity is destroyed. The foreground service's
      * dies when the Activity is destroyed. The foreground service's
      * auto-bind work runs here so it keeps working when the app is in the
      * background and the Activity has been freed.
