@@ -1,10 +1,12 @@
 > **Note:** To access all shared projects, get information about environment setup, and view other guides, please visit [Explore-In-HMOS-Wearable Index](https://github.com/Explore-In-HMOS-Wearable/hmos-index).
 
-# [Mobile to Watch] WearEngine Message & File Send/Receiver
+# [Mobile to Watch] WearEngine Foreground Service
 
-Android P2P Communication Demo using Huawei Wear Engine SDK
-Secure peer-to-peer communication between Android devices and Huawei wearables. 
-Demonstrates message transmission, file transfer, and device management using Wear Engine SDK.
+Android demo that keeps a Huawei Wear Engine P2P connection alive in the
+background using a foreground service. The phone auto-binds to a connected
+watch and periodically exchanges heartbeat messages, surviving Home, Recents
+swipe, screen-off and Doze. Focused entirely on the background-reliability
+problem — there is no manual device picker or file transfer UI.
 
 # Preview
 
@@ -12,10 +14,10 @@ Demonstrates message transmission, file transfer, and device management using We
 |-----------------------------------------|-----------------------------------------|-----------------------------------------|-----------------------------------------|
 
 # Use Cases
-- Send secure messages between phone and watch
-- Transfer files to wearable devices
-- Verify if a package is installed on the target device using ping
-- Automatic device discovery for paired wearables
+- Keep a Wear Engine connection alive while the app is backgrounded
+- Automatically discover and bind a paired, connected wearable
+- Send periodic heartbeat messages to the watch from a foreground service
+- Diagnose process importance, battery optimization and OEM power management
 - Permission management for wearable operations
 
 # Technology
@@ -26,7 +28,13 @@ Demonstrates message transmission, file transfer, and device management using We
 
 ## Required Permissions and Configs
 
-```android.permission.READ_EXTERNAL_STORAGE```
+```android.permission.FOREGROUND_SERVICE```
+```android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE```
+```android.permission.FOREGROUND_SERVICE_DATA_SYNC```
+```android.permission.POST_NOTIFICATIONS```
+```android.permission.WAKE_LOCK```
+```android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS```
+```android.permission.BLUETOOTH_CONNECT```
 ```com.huawei.wearengine.permission.DEVICE_MANAGER```
 
 **P2P Communication Setup:**
@@ -42,21 +50,34 @@ Documentation Link:
 
 ## Key Components
 P2pManager
-- Handles message sending/receiving using Wear Engine P2P client
-- Manages peer package fingerprint verification
-- Implements ping functionality for connection testing
+- Sends/receives messages using the Wear Engine P2P client
+- Manages peer package name and fingerprint verification
 - Registers message receivers for bidirectional communication
-- The file is saved in ```/data/data/{your app package}/files/WearEngine```.
 
 DeviceManager
 - Discovers and lists bonded Huawei wearable devices
 - Retrieves device information (name, capabilities, connection status)
-- Manages device selection for communication
+- Used by the app-level auto-binder to pick a connected watch
 
 AuthManager
 - Handles `DEVICE_MANAGER` permission requests
 - Validates required permissions for wearable access
 - Provides permission status callbacks
+
+WatchLinkService
+- Foreground service that pins the process at FOREGROUND_SERVICE importance
+- Selects its FG type at runtime (`connectedDevice` or `dataSync`)
+- Drives the periodic heartbeat send and holds a wake lock
+
+WatchMessenger
+- Process-wide holder for the bound device and send/receive logs
+- Lets the service reuse the exact Wear Engine clients the app set up
+
+App
+- Owns process-wide Wear Engine singletons and a process-scoped coroutine scope
+- Installs the app-level auto-binder so binding survives Activity destruction
+
+See [FOREGROUND_SERVICE.md](FOREGROUND_SERVICE.md) for the full design.
 
 
 # Directory Structure

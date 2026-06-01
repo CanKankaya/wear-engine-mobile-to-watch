@@ -75,7 +75,6 @@ fun ForegroundServiceScreen(
     val watchLastEntry by WatchMessenger.lastEntry.collectAsStateWithLifecycle()
     val watchSendEntries by WatchMessenger.entries.collectAsStateWithLifecycle()
     val watchReceivedCount by WatchMessenger.receivedCount.collectAsStateWithLifecycle()
-    val watchLastReceived by WatchMessenger.lastReceived.collectAsStateWithLifecycle()
     val watchReceivedEntries by WatchMessenger.receivedEntries.collectAsStateWithLifecycle()
     val autoBindStatus by WatchMessenger.autoBindStatus.collectAsStateWithLifecycle()
 
@@ -259,10 +258,15 @@ fun ForegroundServiceScreen(
         }
 
         StatusCard(
-            title = "App (Activity / process)",
+            title = "Service status",
             rows = listOf(
                 "UI visible to user" to appInForeground.toString(),
                 "Process importance" to processImportanceLabel(),
+                "Service alive" to serviceRunning.toString(),
+                "Sticky notification posted" to isOurNotificationActive(context).toString(),
+                "Notification permission" to notificationsAllowed.toString(),
+                "Heartbeat tick" to heartbeat.toString(),
+                "Uptime" to formatUptime(startedAt, nowElapsed),
             )
         )
 
@@ -322,74 +326,27 @@ fun ForegroundServiceScreen(
         )
 
         StatusCard(
-            title = "Foreground service",
-            rows = listOf(
-                "Service alive" to serviceRunning.toString(),
-                "Sticky notification posted" to isOurNotificationActive(context).toString(),
-                "Notification permission" to notificationsAllowed.toString(),
-                "Heartbeat tick" to heartbeat.toString(),
-                "Uptime" to formatUptime(startedAt, nowElapsed),
-            )
-        )
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Watch binding (auto)",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = if (WatchMessenger.hasDevice())
-                        "A device is currently bound. Sending + receiving are active."
-                    else
-                        "No device bound. The service will retry every 5s while running.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                autoBindStatus?.let {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "Last attempt: $it",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace
-                        )
-                    )
-                }
-            }
-        }
-
-        StatusCard(
-            title = "Watch receiver",
+            title = "Watch",
             rows = listOf(
                 "Device bound" to WatchMessenger.hasDevice().toString(),
-                "Messages received" to watchReceivedCount.toString(),
-                "Last text" to (watchLastReceived?.text ?: "—"),
-                "Last at" to (watchLastReceived?.let {
-                    WatchMessenger.formatTime(it.timestampMs)
-                } ?: "—"),
-            )
-        )
-
-        WatchReceiveLogCard(
-            entries = watchReceivedEntries,
-            onClear = { WatchMessenger.clearReceivedLog() }
-        )
-
-        StatusCard(
-            title = "Watch sender (every 5s)",
-            rows = listOf(
-                "Device bound" to WatchMessenger.hasDevice().toString(),
+                "Last bind attempt" to (autoBindStatus ?: "—"),
                 "Sent OK" to watchSentCount.toString(),
                 "Failed" to watchFailedCount.toString(),
+                "Received" to watchReceivedCount.toString(),
                 "Last status" to (watchLastEntry?.let {
                     "${it.status.name}${it.detail?.let { d -> " ($d)" } ?: ""}"
                 } ?: "—"),
-                "Last text" to (watchLastEntry?.text ?: "—"),
-                "Last at" to (watchLastEntry?.let { WatchMessenger.formatTime(it.timestampMs) } ?: "—"),
             )
         )
 
-        WatchSendLogCard(entries = watchSendEntries, onClear = { WatchMessenger.clearLog() })
+        WatchMessagesCard(
+            sent = watchSendEntries,
+            received = watchReceivedEntries,
+            onClear = {
+                WatchMessenger.clearLog()
+                WatchMessenger.clearReceivedLog()
+            }
+        )
 
         HeartbeatLogCard(entries = log, onClear = { HeartbeatLog.clear() })
 
@@ -568,25 +525,53 @@ private fun shortImportance(value: Int): String = when (value) {
 }
 
 @Composable
-private fun WatchSendLogCard(
-    entries: List<WatchMessenger.Entry>,
+private fun WatchMessagesCard(
+    sent: List<WatchMessenger.Entry>,
+    received: List<WatchMessenger.ReceivedEntry>,
     onClear: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(true) }
+
+    // Merge both directions into one timeline, newest first.
+    val items = remember(sent, received) {
+        val merged = ArrayList<UnifiedMessage>(sent.size + received.size)
+        sent.forEach {
+            merged += UnifiedMessage(
+                timestampMs = it.timestampMs,
+                seq = it.seq,
+                text = it.text,
+                outgoing = true,
+                status = it.status,
+                detail = it.detail,
+            )
+        }
+        received.forEach {
+            merged += UnifiedMessage(
+                timestampMs = it.timestampMs,
+                seq = it.seq,
+                text = it.text,
+                outgoing = false,
+                status = null,
+                detail = null,
+            )
+        }
+        merged.sortedByDescending { it.timestampMs }
+    }
+
     Card {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Watch send log",
+                        text = "Watch messages",
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = "${entries.size} entries",
+                        text = "${items.size} entries · ↑ sent  ↓ received",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-                if (entries.isNotEmpty()) {
+                if (items.isNotEmpty()) {
                     TextButton(onClick = onClear) { Text("Clear") }
                 }
                 IconButton(onClick = { expanded = !expanded }) {
@@ -599,10 +584,10 @@ private fun WatchSendLogCard(
             }
             if (expanded) {
                 Spacer(Modifier.height(8.dp))
-                if (entries.isEmpty()) {
+                if (items.isEmpty()) {
                     Text(
-                        text = "No sends yet. Select a device on the first screen, " +
-                            "then turn the service on.",
+                        text = "No messages yet. Turn the service on and wait for " +
+                            "a watch to bind.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 } else {
@@ -611,32 +596,35 @@ private fun WatchSendLogCard(
                             .fillMaxWidth()
                             .heightIn(max = 300.dp)
                     ) {
-                        items(entries.asReversed()) { entry ->
+                        items(items) { msg ->
                             Column(modifier = Modifier.padding(vertical = 4.dp)) {
                                 Row(modifier = Modifier.fillMaxWidth()) {
                                     Text(
-                                        text = "[${WatchMessenger.formatTime(entry.timestampMs)}] " +
-                                            "#${entry.seq}",
+                                        text = "${if (msg.outgoing) "↑" else "↓"} " +
+                                            "[${WatchMessenger.formatTime(msg.timestampMs)}] " +
+                                            "#${msg.seq}",
                                         modifier = Modifier.weight(1f),
                                         style = MaterialTheme.typography.bodySmall.copy(
                                             fontFamily = FontFamily.Monospace
                                         )
                                     )
-                                    Text(
-                                        text = entry.status.name,
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            color = statusColor(entry.status)
+                                    if (msg.status != null) {
+                                        Text(
+                                            text = msg.status.name,
+                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = statusColor(msg.status)
+                                            )
                                         )
-                                    )
+                                    }
                                 }
                                 Text(
-                                    text = entry.text,
+                                    text = msg.text,
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         fontFamily = FontFamily.Monospace
                                     )
                                 )
-                                entry.detail?.let {
+                                msg.detail?.let {
                                     Text(
                                         text = it,
                                         style = MaterialTheme.typography.bodySmall.copy(
@@ -655,80 +643,21 @@ private fun WatchSendLogCard(
     }
 }
 
+private data class UnifiedMessage(
+    val timestampMs: Long,
+    val seq: Long,
+    val text: String,
+    val outgoing: Boolean,
+    val status: WatchMessenger.Status?,
+    val detail: String?,
+)
+
 @Composable
 private fun statusColor(status: WatchMessenger.Status) = when (status) {
     WatchMessenger.Status.SENT -> MaterialTheme.colorScheme.primary
     WatchMessenger.Status.SENDING -> MaterialTheme.colorScheme.tertiary
     WatchMessenger.Status.FAILED -> MaterialTheme.colorScheme.error
     WatchMessenger.Status.SKIPPED -> MaterialTheme.colorScheme.onSurfaceVariant
-}
-
-@Composable
-private fun WatchReceiveLogCard(
-    entries: List<WatchMessenger.ReceivedEntry>,
-    onClear: () -> Unit,
-) {
-    var expanded by remember { mutableStateOf(true) }
-    Card {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Watch receive log",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = "${entries.size} entries",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-                if (entries.isNotEmpty()) {
-                    TextButton(onClick = onClear) { Text("Clear") }
-                }
-                IconButton(onClick = { expanded = !expanded }) {
-                    Icon(
-                        imageVector = if (expanded) Icons.Filled.KeyboardArrowUp
-                        else Icons.Filled.KeyboardArrowDown,
-                        contentDescription = if (expanded) "Collapse" else "Expand"
-                    )
-                }
-            }
-            if (expanded) {
-                Spacer(Modifier.height(8.dp))
-                if (entries.isEmpty()) {
-                    Text(
-                        text = "No messages received yet. Bind a connected watch above.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 300.dp)
-                    ) {
-                        items(entries.asReversed()) { entry ->
-                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                                Text(
-                                    text = "[${WatchMessenger.formatTime(entry.timestampMs)}] " +
-                                        "#${entry.seq}",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                )
-                                Text(
-                                    text = entry.text,
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                )
-                                HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable
